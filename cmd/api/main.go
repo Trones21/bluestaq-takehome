@@ -18,6 +18,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
+	"github.com/Trones21/bluestaq-takehome/internal/teams"
 	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,6 +64,7 @@ func run() error {
 		Tokens:  tokens,
 		Users:   users.New(st, tokens),
 		Notes:   notes.New(st, metrics),
+		Teams:   teams.New(st),
 	}
 
 	public := &http.Server{

@@ -16,6 +16,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/httpx"
 	"github.com/Trones21/bluestaq-takehome/internal/notes"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
+	"github.com/Trones21/bluestaq-takehome/internal/teams"
 	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -34,6 +35,7 @@ type Deps struct {
 	// server without standing up every dependency.
 	Users *users.Handler
 	Notes *notes.Handler
+	Teams *teams.Handler
 }
 
 // PublicRouter builds the API listener.
@@ -71,6 +73,9 @@ func PublicRouter(d Deps) http.Handler {
 			}
 			if d.Notes != nil {
 				r.Group(d.Notes.Routes)
+			}
+			if d.Teams != nil {
+				r.Group(d.Teams.Routes)
 			}
 		})
 	})

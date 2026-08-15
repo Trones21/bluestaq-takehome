@@ -23,6 +23,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
+	"github.com/Trones21/bluestaq-takehome/internal/teams"
 	"github.com/Trones21/bluestaq-takehome/internal/testdb"
 	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/google/uuid"
@@ -53,6 +54,7 @@ func New(t *testing.T) *Env {
 		Tokens:  tokens,
 		Users:   users.New(st, tokens),
 		Notes:   notes.New(st, metrics),
+		Teams:   teams.New(st),
 	}
 
 	srv := httptest.NewServer(server.PublicRouter(deps))
