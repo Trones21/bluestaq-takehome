@@ -73,3 +73,14 @@ func IsForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
+
+// IsQueryCanceled reports whether Postgres stopped the statement itself --
+// normally because it ran past statement_timeout.
+//
+// Unlike the violations above, this is not tied to any particular query, so it
+// is classified centrally in httpx.WriteProblem rather than at a call site.
+// Any statement can hit it.
+func IsQueryCanceled(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "57014"
+}

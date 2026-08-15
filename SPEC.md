@@ -417,6 +417,9 @@ roughly twenty lines total:
 | Attachment size | 100 MiB | declared at presign, verified at complete |
 | Attachment MIME | image/* , video/mp4, application/pdf | allowlist at presign |
 | Server timeouts | read/write/idle | `http.Server` |
+| Request duration | 15s | context deadline, `obs.Timeout` |
+| Statement duration | 3s | `statement_timeout`, enforced by Postgres |
+| Open transaction, idle | 10s | `idle_in_transaction_session_timeout` |
 | DB connections | bounded | `pgxpool` max conns |
 
 Rows stuck in `pending` are orphans (client abandoned the upload). A sweep deletes `pending`
@@ -516,7 +519,8 @@ structured logs to stdout; shipping logs to Loki is named, not built.
 
 ### Middleware
 
-Every request passes through, in order: request ID → structured logger → metrics → recovery.
+Every request passes through, in order: request ID → structured logger → metrics → recovery
+→ deadline.
 
 - **Request ID** — generated if absent, echoed in the response header, attached to the
   request-scoped logger so every line from one request correlates.
@@ -525,7 +529,9 @@ Every request passes through, in order: request ID → structured logger → met
 - **Metrics** — RED per endpoint:
   - `http_requests_total{method, route, status}` — counter
   - `http_request_duration_seconds{method, route}` — histogram
-  - plus `pgxpool` stats and Go runtime metrics, both free from `client_golang`
+  - `http_request_timeouts_total{method, route}` — counter
+  - `pgxpool_*` — pool saturation, via a small `prometheus.Collector` over `pool.Stat()`
+    (`client_golang` ships the Go runtime and process collectors, but not one for pgx)
 
 ### Cardinality: raw path in logs, route pattern in metrics
 

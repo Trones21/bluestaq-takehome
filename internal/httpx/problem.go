@@ -3,6 +3,7 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,13 @@ import (
 	"net/http"
 
 	"github.com/Trones21/bluestaq-takehome/internal/config"
+	"github.com/Trones21/bluestaq-takehome/internal/store"
 )
+
+// StatusClientClosedRequest is nginx's non-standard 499. Nothing is sent to the
+// client -- by definition they are gone -- but recording it keeps a disconnect
+// out of the 5xx bucket, where it would look like a server fault.
+const StatusClientClosedRequest = 499
 
 // Problem is an RFC 9457 "problem details" response body. One error shape for
 // the whole API means clients write one error handler.
@@ -78,13 +85,42 @@ func problemType(status int) string {
 // *Problem is treated as an internal error: the detail is logged, never sent,
 // because internal error strings leak schema and file paths.
 func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
+	// Context errors arrive here as raw errors from pgx or the S3 client, and
+	// neither is an internal fault. Classifying them before the generic 500
+	// path keeps two very different events out of the error log -- shed load,
+	// and a client that hung up -- so a 500 keeps meaning "this service has a
+	// bug", which is what an alert on it should mean.
+	//
+	// A disconnect leaves no one to write to, so it records a status for the
+	// log and the metric and sends no body.
+	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		Logger(r).Info("client disconnected before the response was written")
+		w.WriteHeader(StatusClientClosedRequest)
+		return
+	}
+
 	var p *Problem
-	if !errors.As(err, &p) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		Logger(r).Warn("request exceeded its deadline", slog.Any("err", err))
+		p = Errorf(http.StatusServiceUnavailable,
+			"the server took too long to handle this request; retry shortly")
+
+	// Same class as the deadline above, one layer down: the database stopped
+	// the statement at statement_timeout. Distinguished in the log because the
+	// remedy is different -- a request deadline points at queueing or a slow
+	// dependency, this points at one query.
+	case store.IsQueryCanceled(err):
+		Logger(r).Warn("database cancelled the statement at statement_timeout", slog.Any("err", err))
+		p = Errorf(http.StatusServiceUnavailable,
+			"the server took too long to handle this request; retry shortly")
+	case errors.As(err, &p):
+		if p.Status >= 500 {
+			Logger(r).Error("request failed", slog.Any("err", err), slog.Int("status", p.Status))
+		}
+	default:
 		Logger(r).Error("unhandled error", slog.Any("err", err))
 		p = Errorf(http.StatusInternalServerError, "an internal error occurred")
-	}
-	if p.Status >= 500 {
-		Logger(r).Error("request failed", slog.Any("err", err), slog.Int("status", p.Status))
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)

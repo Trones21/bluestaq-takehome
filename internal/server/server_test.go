@@ -28,7 +28,10 @@ func (s stubPinger) Ping(context.Context) error { return s.err }
 func testDeps(t *testing.T, db Pinger) Deps {
 	t.Helper()
 	return Deps{
-		Config:  &config.Config{CORSOrigins: []string{"https://notes.example"}},
+		Config: &config.Config{
+			CORSOrigins:    []string{"https://notes.example"},
+			RequestTimeout: 5 * time.Second,
+		},
 		Tokens:  auth.NewTokens([]byte(strings.Repeat("k", 32)), time.Hour),
 		Logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Metrics: obs.NewMetrics(),

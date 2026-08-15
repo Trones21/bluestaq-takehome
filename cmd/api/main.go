@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -70,6 +71,9 @@ func run() error {
 	st := store.New(pool)
 	tokens := auth.NewTokens(cfg.JWTSecret, cfg.JWTTTL)
 	metrics := obs.NewMetrics()
+	if err := metrics.RegisterPool(pool); err != nil {
+		return fmt.Errorf("registering pool metrics: %w", err)
+	}
 
 	objects, err := storage.New(cfg.Storage)
 	if err != nil {
@@ -97,16 +101,18 @@ func run() error {
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: server.PublicRouter(deps),
 		// Timeouts are not optional: without them a slow or malicious client
-		// holds a connection and a goroutine indefinitely.
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// holds a connection and a goroutine indefinitely. These bound the
+		// socket; cfg.RequestTimeout bounds the handler. Both are needed --
+		// WriteTimeout does not cancel the request context.
+		ReadHeaderTimeout: config.ReadHeaderTimeout,
+		ReadTimeout:       config.ReadTimeout,
+		WriteTimeout:      config.WriteTimeout,
+		IdleTimeout:       config.IdleTimeout,
 	}
 	admin := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.AdminPort),
 		Handler:           server.AdminRouter(deps),
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: config.ReadHeaderTimeout,
 	}
 
 	errCh := make(chan error, 2)
@@ -153,6 +159,20 @@ func newPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	// Bounded on purpose: an unbounded pool turns a traffic spike into
 	// "too many connections" on a database shared with everything else.
 	poolCfg.MaxConns = cfg.MaxDBConns
+
+	// Sent at connection setup, so every pooled connection carries them.
+	// Enforced by Postgres rather than by this process, which is the whole
+	// point: cancelling a context breaks our end of the socket, but the
+	// backend keeps executing until it next tries to write. These stop the
+	// work. See DISCUSSION 13.
+	//
+	// Scoped to the API pool deliberately. cmd/sweep builds its own pool from
+	// DATABASE_URL and runs under a ten minute budget -- a batch job has no
+	// business inheriting a three second statement bound.
+	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] =
+		strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
+	poolCfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] =
+		strconv.FormatInt(cfg.IdleInTxTimeout.Milliseconds(), 10)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

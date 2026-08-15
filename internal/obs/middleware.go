@@ -1,6 +1,8 @@
 package obs
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -22,6 +24,51 @@ func RequestID(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-Id", id)
 		next.ServeHTTP(w, r.WithContext(httpx.WithRequestID(r.Context(), id)))
 	})
+}
+
+// Timeout gives every request a deadline.
+//
+// This is the piece that makes the bounded pool actually shed load. MaxConns
+// caps concurrent queries and parks the rest, but a parked goroutine waits on
+// its context, and without a deadline that wait has no upper bound -- the
+// server's WriteTimeout closes the socket without cancelling the request
+// context, so the handler keeps waiting for a client that is already gone.
+// Under sustained overload that queue grows until the process does.
+//
+// It cancels rather than pre-empts: the deadline unblocks anything context
+// aware (pgx, the S3 client) and those return context.DeadlineExceeded, which
+// httpx.WriteProblem renders as a 503. A handler that ignored its context
+// entirely would still run to completion -- accepted, because the alternative
+// (http.TimeoutHandler) writes its own plain-text body and would put one
+// response outside the problem+json contract every other error obeys.
+func Timeout(m *Metrics, d time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		// A zero duration means an unset field on a hand-built Config, not "no
+		// time at all" -- config.Load rejects a non-positive REQUEST_TIMEOUT,
+		// so this can only be a caller assembling Deps directly. Passing
+		// through beats expiring every request instantly.
+		if d <= 0 {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), d)
+			defer cancel()
+
+			r = r.WithContext(ctx)
+			next.ServeHTTP(w, r)
+
+			// Checked after the handler returns, when chi has resolved the
+			// route pattern. Same cardinality rule as everywhere else: the
+			// pattern, never the raw path.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				route := "unmatched"
+				if rc := chi.RouteContext(ctx); rc != nil && rc.RoutePattern() != "" {
+					route = rc.RoutePattern()
+				}
+				m.Timeouts.WithLabelValues(r.Method, route).Inc()
+			}
+		})
+	}
 }
 
 // statusRecorder captures the status code and byte count, which the

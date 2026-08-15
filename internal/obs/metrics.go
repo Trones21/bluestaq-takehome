@@ -21,6 +21,10 @@ type Metrics struct {
 	// users are colliding, which is the signal that real-time collaboration
 	// has become worth building.
 	Conflicts prometheus.Counter
+	// Timeouts counts requests killed by the deadline. Distinct from the 503s
+	// in Requests, which also cover readiness failures: this one means the
+	// service was up and still could not finish in time.
+	Timeouts *prometheus.CounterVec
 
 	registry *prometheus.Registry
 }
@@ -57,10 +61,15 @@ func NewMetrics() *Metrics {
 			Name: "note_update_conflicts_total",
 			Help: "Note updates rejected with 409 due to a stale If-Match version.",
 		}),
+
+		Timeouts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "http_request_timeouts_total",
+			Help: "Requests whose context deadline expired before the handler finished.",
+		}, []string{"method", "route"}),
 	}
 
 	reg.MustRegister(
-		m.Requests, m.Duration, m.InFlight, m.Presigns, m.Conflicts,
+		m.Requests, m.Duration, m.InFlight, m.Presigns, m.Conflicts, m.Timeouts,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

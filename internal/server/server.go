@@ -43,10 +43,13 @@ func PublicRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 
 	// Order matters: request ID first so every later line can reference it,
-	// recovery inside Observe so panics are still counted and logged as 500s.
+	// recovery inside Observe so panics are still counted and logged as 500s,
+	// and the deadline inside recovery so a timed-out request is still one
+	// logged line with a real status rather than a silent drop.
 	r.Use(obs.RequestID)
 	r.Use(obs.Observe(d.Metrics, d.Logger))
 	r.Use(obs.Recover)
+	r.Use(obs.Timeout(d.Metrics, d.Config.RequestTimeout))
 	r.Use(cors(d.Config.CORSOrigins))
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
