@@ -383,3 +383,62 @@ The same rule explains the one exception worth flagging: login brute-force throt
 rate limiting but is not delegable, because the edge cannot tell a failed login from a
 successful one. Only this service knows. By the rule above it should have been built, and it is
 the sharpest gap in the current scope.
+
+---
+
+## 13. "Your pool is bounded at ten. What happens to request eleven?"
+
+It waits — and until recently, it waited forever. Working through that question is what
+produced the request deadline, so it is worth tracing properly.
+
+`net/http` gives every request its own goroutine, and Go will happily make thousands of them.
+A Postgres connection executes exactly one query at a time, so concurrent queries need
+concurrent connections. `DB_MAX_CONNS` (10) is where those two facts meet: at most ten queries
+run at once, and goroutine eleven parks inside `pgxpool` until one frees up.
+
+Ten sounds small until you notice **when** the connection is held. It is acquired at the query
+and released the moment it returns — not for the life of the request. Parsing, authorization,
+serialization and the response write all happen without one. Since the database is a small
+slice of each request, ten connections comfortably serve far more than ten concurrent users.
+The exception is a transaction, which holds its connection from `Begin` to `Commit`: long
+transactions exhaust this pool in a way high request volume does not.
+
+**The bug that analysis surfaced.** A parked goroutine waits on its context. The server's
+`WriteTimeout` does *not* cancel the request context — it is a deadline on the socket, and Go
+cancels a request context only when the client disconnects or the handler returns. So the pool
+bounded connections correctly while the queue of waiters behind it had no bound at all. Under
+sustained overload that queue grows until the process does, and the 60s write timeout quietly
+abandons sockets whose handlers keep waiting for clients that are already gone.
+
+**What ships:** `REQUEST_TIMEOUT` (15s, validated below the write timeout) as a context
+deadline in `obs.Timeout`. It cancels rather than pre-empts — the deadline unblocks anything
+context-aware, pgx included, which returns `context.DeadlineExceeded`, which `httpx.WriteProblem`
+renders as a 503. `http.TimeoutHandler` would guarantee a response even from a handler that
+ignores its context, but it writes its own plain-text body, putting one response outside the
+problem+json contract every other error obeys. Cancellation covers every path this service
+actually has.
+
+**Two errors stopped being 500s**, which matters more than it sounds. A deadline and a client
+disconnect both reach the error path as context errors, and both were being logged as
+"unhandled error" and served as 500. Shed load is now a 503 logged at warn; a disconnect is a
+499 logged at info with no body, because there is no one left to write to. The 500 bucket is
+what an on-call alert watches, and it should mean "this service has a bug" — not "someone
+closed a laptop."
+
+**And it is now visible.** `pgxpool_*` exports the pool's own counters, which is the only way
+to tell "the query was slow" from "the request waited its turn" — opposite fixes, identical
+latency graph. The number to watch is `pgxpool_acquire_wait_seconds_total` over
+`pgxpool_acquires_total`: average time queueing rather than working.
+
+`pgxpool_acquires_empty_total` is the trap. It reads like a saturation counter, but pgxpool
+increments it whenever an acquire finds no *idle* connection — including while the pool is
+still growing toward its ceiling. With `MinConns` at 0 a healthy cold pool records one per
+connection it opens. It means saturation only alongside `pgxpool_connections{state="acquired"}`
+sitting at `pgxpool_connections_max`. That was mis-documented here first, and the test caught it.
+
+**Where this goes next.** The whole arrangement holds because there is one long-lived process:
+a client-side pool *is* the pooler, and RDS ships no pooler of its own. The trigger for adding
+one — RDS Proxy, or PgBouncer — is process count, not traffic. Every additional instance brings
+its own pool and the database sees the sum, which is also the real reason Lambda would be a poor
+fit here: a function container holds its connection for the container's lifetime, idle time
+included, so connections would scale with concurrency instead of with query time.

@@ -24,6 +24,11 @@ export ADMIN_PORT=9090
 export DATABASE_URL="postgres://notes:notes@localhost:5433/notes?sslmode=disable"
 export DB_MAX_CONNS=10
 
+# Bounds how long a request may spend in handler code. DB_MAX_CONNS caps how
+# many queries run at once; this caps how long the requests queued behind them
+# are willing to wait. Must stay below the 60s write timeout.
+export REQUEST_TIMEOUT=15s
+
 # Local only. Production reads this from pass; see generate_dot_env_prod.sh.
 # Must be at least 32 bytes or startup fails.
 export JWT_SECRET="local-development-only-secret-do-not-use-in-prod"
