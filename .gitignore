@@ -10,3 +10,6 @@
 # Test and tooling artifacts
 *.out
 coverage.*
+
+# Session-local Claude tool permissions -- machine-specific, not part of the deliverable
+.claude/

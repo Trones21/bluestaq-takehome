@@ -12,9 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Trones21/bluestaq-takehome/internal/auth"
 	"github.com/Trones21/bluestaq-takehome/internal/config"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
+	"github.com/Trones21/bluestaq-takehome/internal/store"
+	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,11 +50,16 @@ func run() error {
 	}
 	defer pool.Close()
 
+	st := store.New(pool)
+	tokens := auth.NewTokens(cfg.JWTSecret, cfg.JWTTTL)
+
 	deps := server.Deps{
 		Config:  cfg,
 		Logger:  log,
 		Metrics: obs.NewMetrics(),
 		DB:      pool,
+		Tokens:  tokens,
+		Users:   users.New(st, tokens),
 	}
 
 	public := &http.Server{

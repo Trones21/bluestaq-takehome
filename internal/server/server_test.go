@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Trones21/bluestaq-takehome/internal/auth"
 	"github.com/Trones21/bluestaq-takehome/internal/config"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/go-chi/chi/v5"
@@ -27,6 +29,7 @@ func testDeps(t *testing.T, db Pinger) Deps {
 	t.Helper()
 	return Deps{
 		Config:  &config.Config{CORSOrigins: []string{"https://notes.example"}},
+		Tokens:  auth.NewTokens([]byte(strings.Repeat("k", 32)), time.Hour),
 		Logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Metrics: obs.NewMetrics(),
 		DB:      db,

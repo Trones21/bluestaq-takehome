@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Trones21/bluestaq-takehome/internal/auth"
 	"github.com/Trones21/bluestaq-takehome/internal/config"
 	"github.com/Trones21/bluestaq-takehome/internal/httpx"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
+	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -25,6 +27,11 @@ type Deps struct {
 	Logger  *slog.Logger
 	Metrics *obs.Metrics
 	DB      Pinger
+	Tokens  *auth.Tokens
+
+	// Feature handlers. Nil-checked so router tests can build a partial
+	// server without standing up every dependency.
+	Users *users.Handler
 }
 
 // PublicRouter builds the API listener.
@@ -47,8 +54,20 @@ func PublicRouter(d Deps) http.Handler {
 	})
 
 	r.Route("/v1", func(r chi.Router) {
-		// Feature routers mount here as they land.
-		_ = r
+		// Unauthenticated: obtaining a token.
+		if d.Users != nil {
+			r.Group(d.Users.PublicRoutes)
+		}
+
+		// Everything else requires one. Grouped rather than per-route so a new
+		// endpoint is authenticated by default -- forgetting to add middleware
+		// is a far likelier mistake than forgetting to remove it.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.Middleware(d.Tokens))
+			if d.Users != nil {
+				r.Group(d.Users.AuthedRoutes)
+			}
+		})
 	})
 
 	return r
