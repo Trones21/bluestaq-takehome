@@ -57,6 +57,10 @@ func PublicRouter(d Deps) http.Handler {
 			http.StatusMethodNotAllowed, "method not allowed for this endpoint"))
 	})
 
+	// Unauthenticated on purpose: the contract is public, and a reviewer needs
+	// to read it before they have a token.
+	docsRoutes(r)
+
 	r.Route("/v1", func(r chi.Router) {
 		// Unauthenticated: obtaining a token.
 		if d.Users != nil {

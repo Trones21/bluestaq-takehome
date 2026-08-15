@@ -9,7 +9,12 @@ from utils.collector import collect_flows_by_folder
 from utils import perf
 ##### Import Manually Registered Flows
 from flows.crud import note, team
-from flows.confirm_business_logic import concurrency, sharing, teams_and_accounts
+from flows.confirm_business_logic import (
+    concurrency,
+    search_and_files,
+    sharing,
+    teams_and_accounts,
+)
 
 ### Manually Registered
 
@@ -28,6 +33,12 @@ REQUEST_FLOWS = {
     "precondition": concurrency.precondition_is_mandatory,
     "etag_forms": concurrency.quoted_and_bare_versions_both_work,
     "soft_delete": concurrency.soft_delete_hides_and_owner_restores,
+    # Listing, search and attachments
+    "search_scope": search_and_files.search_only_reaches_your_own_notes,
+    "pagination": search_and_files.keyset_pagination_visits_each_note_once,
+    "deleted_scope": search_and_files.deleted_notes_are_owner_scoped,
+    "upload": search_and_files.attachment_upload_is_two_phase,
+    "body_refs": search_and_files.note_bodies_reference_attachments_not_urls,
     # Teams and accounts
     "last_admin": teams_and_accounts.last_admin_cannot_strand_the_team,
     "team_privacy": teams_and_accounts.team_membership_is_concealed_from_outsiders,
