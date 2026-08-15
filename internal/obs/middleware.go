@@ -1,0 +1,128 @@
+package obs
+
+import (
+	"log/slog"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/Trones21/bluestaq-takehome/internal/httpx"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+)
+
+// RequestID assigns each request an ID, echoes it in the response, and puts it
+// on the context so every log line from one request correlates.
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-Id")
+		if id == "" {
+			id = uuid.NewString()
+		}
+		w.Header().Set("X-Request-Id", id)
+		next.ServeHTTP(w, r.WithContext(httpx.WithRequestID(r.Context(), id)))
+	})
+}
+
+// statusRecorder captures the status code and byte count, which the
+// ResponseWriter does not expose after the fact.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	n, err := s.ResponseWriter.Write(b)
+	s.bytes += n
+	return n, err
+}
+
+// Observe logs and measures every request.
+//
+// The cardinality rule this enforces: metric labels use the chi *route
+// pattern* ("/v1/notes/{id}"), while the log line carries the raw path.
+// Prometheus is pull-based, so a client-side child metric lives for the life
+// of the process -- labelling by raw path would add a permanent, never-evicted
+// entry per note UUID ever requested. Logs have the opposite shape:
+// write-and-forget, indexed elsewhere, cardinality is free. So each gets the
+// form that is cheap for it. See SPEC 10.
+func Observe(m *Metrics, log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			m.InFlight.Inc()
+			defer m.InFlight.Dec()
+
+			rec := &statusRecorder{ResponseWriter: w}
+
+			l := log.With(slog.String("request_id", httpx.RequestID(r)))
+			r = r.WithContext(httpx.WithLogger(r.Context(), l))
+
+			next.ServeHTTP(rec, r)
+
+			if rec.status == 0 {
+				rec.status = http.StatusOK
+			}
+			elapsed := time.Since(start)
+
+			// Resolved after ServeHTTP: chi fills the route context during
+			// routing. Unmatched requests report "unmatched" rather than the
+			// raw path, so 404 scans cannot inflate cardinality either.
+			route := "unmatched"
+			if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
+				route = rc.RoutePattern()
+			}
+
+			m.Requests.WithLabelValues(r.Method, route, strconv.Itoa(rec.status)).Inc()
+			m.Duration.WithLabelValues(r.Method, route).Observe(elapsed.Seconds())
+
+			attrs := []any{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path), // raw path: cheap here
+				slog.String("route", route),
+				slog.Int("status", rec.status),
+				slog.Int("bytes", rec.bytes),
+				slog.Duration("duration", elapsed),
+			}
+			if uid, ok := httpx.UserID(r.Context()); ok {
+				attrs = append(attrs, slog.String("user_id", uid.String()))
+			}
+
+			// Note titles, bodies, emails, tokens and presigned URLs are never
+			// logged. Logging is by explicit field, never by struct dump, so
+			// this holds by construction rather than by discipline.
+			switch {
+			case rec.status >= 500:
+				l.Error("request", attrs...)
+			case rec.status >= 400:
+				l.Warn("request", attrs...)
+			default:
+				l.Info("request", attrs...)
+			}
+		})
+	}
+}
+
+// Recover turns a panic into a 500 instead of a dropped connection, and logs
+// it with the request ID so it can be tied to the rest of the request's trail.
+func Recover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				httpx.Logger(r).Error("panic recovered", slog.Any("panic", rec))
+				httpx.WriteProblem(w, r, httpx.Errorf(
+					http.StatusInternalServerError, "an internal error occurred"))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}

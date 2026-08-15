@@ -1,0 +1,12 @@
+# Build output
+/bin/
+*.tar
+
+# Local environment -- never commit secrets
+.env
+.env.*
+!.env.example
+
+# Test and tooling artifacts
+*.out
+coverage.*
