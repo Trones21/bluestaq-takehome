@@ -29,6 +29,15 @@ export DB_MAX_CONNS=10
 # are willing to wait. Must stay below the 60s write timeout.
 export REQUEST_TIMEOUT=15s
 
+# Enforced by Postgres on every API connection, not by the Go process --
+# cancelling a context breaks our end of the socket, but the backend keeps
+# working until it tries to write. STATEMENT_TIMEOUT bounds one running
+# statement; IDLE_IN_TX_TIMEOUT bounds a transaction left open executing
+# nothing, which no statement timeout can catch. cmd/sweep is unaffected: it
+# builds its own pool straight from DATABASE_URL.
+export STATEMENT_TIMEOUT=3s
+export IDLE_IN_TX_TIMEOUT=10s
+
 # Local only. Production reads this from pass; see generate_dot_env_prod.sh.
 # Must be at least 32 bytes or startup fails.
 export JWT_SECRET="local-development-only-secret-do-not-use-in-prod"

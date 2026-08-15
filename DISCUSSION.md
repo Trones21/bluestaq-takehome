@@ -436,6 +436,41 @@ still growing toward its ceiling. With `MinConns` at 0 a healthy cold pool recor
 connection it opens. It means saturation only alongside `pgxpool_connections{state="acquired"}`
 sitting at `pgxpool_connections_max`. That was mis-documented here first, and the test caught it.
 
+**Two budgets, not one.** "How long will you wait to start talking to the database" and "how
+long will you wait once you have" are separate questions with separate answers. A request that
+times out *waiting* has done nothing -- no locks, no work, always safe to retry. One that times
+out *mid-statement* has consumed real database work. A single request deadline cannot tell you
+which happened, and the remedies are opposites: too few connections for the load, versus queries
+that are too slow.
+
+The second budget is enforced in Postgres, because that is the only place it can be. Cancelling
+a context breaks this end of the socket, but Postgres does not check whether the client is still
+there mid-statement -- `client_connection_check_interval` defaults to 0 -- so the backend keeps
+executing until it next tries to write results. `statement_timeout` (3s) stops the work rather
+than abandoning it. Its companion is `idle_in_transaction_session_timeout` (10s), which covers
+the case a statement timeout structurally cannot: a transaction that is open but executing
+nothing, because the client stalled between statements while holding locks and a pool
+connection.
+
+Both are generous by roughly two orders of magnitude. Every transaction here runs through
+`Store.Tx` -- five callers, all of them a few statements against indexed rows, none of them
+doing object storage or any other network call inside the transaction. Real work finishes in
+milliseconds, so these are blast radius limits, not performance tuning: hitting either is a bug
+or a pathological plan, never a slow but legitimate request. They are set on the API pool only,
+since `cmd/sweep` is a batch job with a ten minute budget and has no business inheriting a three
+second statement bound.
+
+Postgres reports the cancellation as SQLSTATE 57014, which `WriteProblem` classifies as a 503
+alongside the request deadline -- centrally, because any query can hit it, and separately logged
+because "one query is too slow" and "we are queueing" call for different fixes.
+
+**What is still folded together.** The acquire budget is not separate. `pool.Query` acquires and
+queries under one context, so splitting them means routing every call site through
+`pool.Acquire`, and the payoff is narrower than it looks -- the *diagnosis* is already covered by
+`pgxpool_acquire_wait_seconds_total`, so what is missing is only the fail-fast behaviour of
+shedding at 3s instead of 15s under saturation. The trigger to build it is that metric showing
+sustained queueing, not a hunch.
+
 **Where this goes next.** The whole arrangement holds because there is one long-lived process:
 a client-side pool *is* the pooler, and RDS ships no pooler of its own. The trigger for adding
 one — RDS Proxy, or PgBouncer — is process count, not traffic. Every additional instance brings

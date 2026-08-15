@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The distinction under test: a request that ran out of time and a client that
@@ -96,5 +98,40 @@ func TestInternalErrorDetailIsNeverSentToTheClient(t *testing.T) {
 	}
 	if p.Detail != "an internal error occurred" {
 		t.Fatalf("internal detail leaked to the client: %q", p.Detail)
+	}
+}
+
+func TestStatementTimeoutIsA503NotAnInternalError(t *testing.T) {
+	// SQLSTATE 57014, as Postgres returns it when a statement runs past
+	// statement_timeout. Classified centrally because any query can hit it.
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
+
+	WriteProblem(rec, r, fmt.Errorf("listing notes: %w",
+		&pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+
+	var p Problem
+	if err := json.NewDecoder(rec.Body).Decode(&p); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if p.Detail == "" {
+		t.Fatal("a 503 should tell the client it is worth retrying")
+	}
+}
+
+func TestOtherDatabaseErrorsStayInternal(t *testing.T) {
+	// Only the cancellation code is special-cased; a constraint violation that
+	// reached here unhandled is still a bug worth a 500.
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
+
+	WriteProblem(rec, r, &pgconn.PgError{Code: "23505", Message: "duplicate key"})
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
 	}
 }

@@ -418,6 +418,8 @@ roughly twenty lines total:
 | Attachment MIME | image/* , video/mp4, application/pdf | allowlist at presign |
 | Server timeouts | read/write/idle | `http.Server` |
 | Request duration | 15s | context deadline, `obs.Timeout` |
+| Statement duration | 3s | `statement_timeout`, enforced by Postgres |
+| Open transaction, idle | 10s | `idle_in_transaction_session_timeout` |
 | DB connections | bounded | `pgxpool` max conns |
 
 Rows stuck in `pending` are orphans (client abandoned the upload). A sweep deletes `pending`

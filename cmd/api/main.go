@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -158,6 +159,20 @@ func newPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	// Bounded on purpose: an unbounded pool turns a traffic spike into
 	// "too many connections" on a database shared with everything else.
 	poolCfg.MaxConns = cfg.MaxDBConns
+
+	// Sent at connection setup, so every pooled connection carries them.
+	// Enforced by Postgres rather than by this process, which is the whole
+	// point: cancelling a context breaks our end of the socket, but the
+	// backend keeps executing until it next tries to write. These stop the
+	// work. See DISCUSSION 13.
+	//
+	// Scoped to the API pool deliberately. cmd/sweep builds its own pool from
+	// DATABASE_URL and runs under a ten minute budget -- a batch job has no
+	// business inheriting a three second statement bound.
+	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] =
+		strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
+	poolCfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] =
+		strconv.FormatInt(cfg.IdleInTxTimeout.Milliseconds(), 10)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

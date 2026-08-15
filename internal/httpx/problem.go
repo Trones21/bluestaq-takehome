@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/Trones21/bluestaq-takehome/internal/config"
+	"github.com/Trones21/bluestaq-takehome/internal/store"
 )
 
 // StatusClientClosedRequest is nginx's non-standard 499. Nothing is sent to the
@@ -102,6 +103,15 @@ func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		Logger(r).Warn("request exceeded its deadline", slog.Any("err", err))
+		p = Errorf(http.StatusServiceUnavailable,
+			"the server took too long to handle this request; retry shortly")
+
+	// Same class as the deadline above, one layer down: the database stopped
+	// the statement at statement_timeout. Distinguished in the log because the
+	// remedy is different -- a request deadline points at queueing or a slow
+	// dependency, this points at one query.
+	case store.IsQueryCanceled(err):
+		Logger(r).Warn("database cancelled the statement at statement_timeout", slog.Any("err", err))
 		p = Errorf(http.StatusServiceUnavailable,
 			"the server took too long to handle this request; retry shortly")
 	case errors.As(err, &p):
