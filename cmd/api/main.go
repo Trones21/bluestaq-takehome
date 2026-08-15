@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,7 +24,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// healthcheck lets the container health check run the binary itself.
+//
+// The image is distroless -- no shell, no curl, nothing to exec. Shipping a
+// shell purely so a healthcheck can call curl would hand any future RCE a
+// working toolchain, so the binary probes itself instead.
+var healthcheck = flag.Bool("healthcheck", false,
+	"probe the local admin listener and exit 0 if ready (for container health checks)")
+
 func main() {
+	flag.Parse()
+
+	if *healthcheck {
+		os.Exit(probe())
+	}
 	if err := run(); err != nil {
 		// The logger may not exist yet if config failed, so this one goes to
 		// stderr directly.
@@ -149,4 +163,25 @@ func newLogger(level string) *slog.Logger {
 		l = slog.LevelInfo
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l}))
+}
+
+// probe checks the admin readiness endpoint on localhost. Returns a process
+// exit code: 0 ready, 1 not.
+func probe() int {
+	port := os.Getenv("ADMIN_PORT")
+	if port == "" {
+		port = "9090"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	res, err := client.Get(fmt.Sprintf("http://127.0.0.1:%s/readyz", port))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", res.StatusCode)
+		return 1
+	}
+	return 0
 }

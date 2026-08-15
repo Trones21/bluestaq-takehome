@@ -1,0 +1,26 @@
+# Scrapes the API's admin listener.
+#
+# 15s matches the histogram's usefulness: finer buckets the app does not have,
+# coarser and a short incident disappears between samples.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: notes-api
+    # The admin port, not the public one -- metrics never leave the internal
+    # network. Reached by container name over the compose network.
+    static_configs:
+      - targets: ["api:9090"]
+        labels:
+          service: notes-api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+# No alerting rules yet. Named as a gap rather than shipped empty: the useful
+# alerts here are readiness flapping, the 5xx rate on http_requests_total, and
+# a rising note_update_conflicts_total, which is the signal that users are
+# colliding often enough for real-time collaboration to be worth building.

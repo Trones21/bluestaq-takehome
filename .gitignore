@@ -13,3 +13,11 @@ coverage.*
 
 # Session-local Claude tool permissions -- machine-specific, not part of the deliverable
 .claude/
+
+# Rendered production environment -- contains live secrets, written by
+# scripts/generate_dot_env_prod.sh and removed by deploy.sh
+.env_prod
+scripts/env/prod.sh
+
+# Saved container images
+*.tar

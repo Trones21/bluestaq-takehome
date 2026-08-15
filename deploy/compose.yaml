@@ -1,0 +1,83 @@
+# Production stack for the single host.
+#
+# __APP_HOST__ and __ACME_EMAIL__ are substituted by scripts/deploy.sh from the
+# production env, so this file carries no environment-specific values and can
+# be read by anyone.
+#
+# Postgres is NOT here: production uses RDS, reached through DATABASE_URL in
+# .env_prod. The only difference from local is that connection string.
+
+name: notes
+
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: notes-proxy
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Everything on 80 is redirected, so a client that forgets the scheme
+      # does not send a bearer token in cleartext first.
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=__ACME_EMAIL__"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik needs to watch container labels, and the Docker
+      # socket is root-equivalent, so it gets the least it can work with.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  api:
+    image: notes-api:latest
+    container_name: notes-api
+    env_file:
+      - .env_prod
+    # Read into the container environment at start; deploy.sh shreds the file
+    # immediately afterwards.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`__APP_HOST__`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      # Only the public port is routed. The admin port carrying /metrics,
+      # /healthz and /readyz has no router at all, so it is reachable from the
+      # host and from Prometheus on the internal network, and from nowhere
+      # else. Operators use an SSH tunnel.
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+    ports:
+      # Bound to loopback, so `ssh -L 9090:localhost:9090` works and the open
+      # internet does not.
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      # The image is distroless and has no shell or curl, so the check runs the
+      # API binary's own probe rather than shelling out.
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    depends_on:
+      - traefik
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: notes-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9091:9090" # loopback only; reach it over an SSH tunnel
+    restart: unless-stopped
+
+volumes:
+  promdata:
