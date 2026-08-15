@@ -18,6 +18,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/notes"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
+	"github.com/Trones21/bluestaq-takehome/internal/storage"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
 	"github.com/Trones21/bluestaq-takehome/internal/teams"
 	"github.com/Trones21/bluestaq-takehome/internal/users"
@@ -70,6 +71,11 @@ func run() error {
 	tokens := auth.NewTokens(cfg.JWTSecret, cfg.JWTTTL)
 	metrics := obs.NewMetrics()
 
+	objects, err := storage.New(cfg.Storage)
+	if err != nil {
+		return fmt.Errorf("object storage: %w", err)
+	}
+
 	deps := server.Deps{
 		Config:  cfg,
 		Logger:  log,
@@ -77,8 +83,14 @@ func run() error {
 		DB:      pool,
 		Tokens:  tokens,
 		Users:   users.New(st, tokens),
-		Notes:   notes.New(st, metrics),
-		Teams:   teams.New(st),
+		Notes: notes.New(st, metrics, notes.StorageDeps{
+			Store:       objects,
+			UploadTTL:   cfg.Storage.UploadTTL,
+			DownloadTTL: cfg.Storage.DownloadTTL,
+			MaxBytes:    cfg.Storage.MaxAttachmentBytes,
+			AllowedMIME: cfg.Storage.AllowedMIMEPrefix,
+		}),
+		Teams: teams.New(st),
 	}
 
 	public := &http.Server{

@@ -98,6 +98,7 @@ generate: ## Regenerate sqlc code from schema and queries
 build: ## Build both binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -o bin/api ./cmd/api
 	CGO_ENABLED=0 go build -trimpath -o bin/migrate ./cmd/migrate
+	CGO_ENABLED=0 go build -trimpath -o bin/sweep ./cmd/sweep
 
 .PHONY: image
 image: ## Build the production container image

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/notes"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
+	"github.com/Trones21/bluestaq-takehome/internal/storage"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
 	"github.com/Trones21/bluestaq-takehome/internal/teams"
 	"github.com/Trones21/bluestaq-takehome/internal/testdb"
@@ -46,6 +48,29 @@ func New(t *testing.T) *Env {
 	metrics := obs.NewMetrics()
 	tokens := auth.NewTokens([]byte(strings.Repeat("t", 32)), time.Hour)
 
+	// Real MinIO from docker-compose, not a fake. The interesting failures in
+	// the attachment flow are what object storage actually does -- a missing
+	// object at completion, a size that does not match what was declared --
+	// and a stub would assert only that we called our own interface.
+	storeCfg := config.StorageConfig{
+		Endpoint:     envOr("TEST_S3_ENDPOINT", "http://localhost:9000"),
+		Region:       "us-east-1",
+		Bucket:       envOr("TEST_S3_BUCKET", "notes-attachments"),
+		AccessKey:    envOr("TEST_S3_ACCESS_KEY", "minioadmin"),
+		SecretKey:    envOr("TEST_S3_SECRET_KEY", "minioadmin"),
+		UsePathStyle: true,
+		UploadTTL:    15 * time.Minute,
+		DownloadTTL:  time.Hour,
+		// Small on purpose, so the over-limit path is testable without moving
+		// a hundred megabytes through the test.
+		MaxAttachmentBytes: 1 << 20,
+		AllowedMIMEPrefix:  []string{"image/", "video/mp4", "application/pdf"},
+	}
+	objects, err := storage.New(storeCfg)
+	if err != nil {
+		t.Fatalf("object storage: %v", err)
+	}
+
 	deps := server.Deps{
 		Config:  &config.Config{},
 		Logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -53,14 +78,27 @@ func New(t *testing.T) *Env {
 		DB:      st.Pool,
 		Tokens:  tokens,
 		Users:   users.New(st, tokens),
-		Notes:   notes.New(st, metrics),
-		Teams:   teams.New(st),
+		Notes: notes.New(st, metrics, notes.StorageDeps{
+			Store:       objects,
+			UploadTTL:   storeCfg.UploadTTL,
+			DownloadTTL: storeCfg.DownloadTTL,
+			MaxBytes:    storeCfg.MaxAttachmentBytes,
+			AllowedMIME: storeCfg.AllowedMIMEPrefix,
+		}),
+		Teams: teams.New(st),
 	}
 
 	srv := httptest.NewServer(server.PublicRouter(deps))
 	t.Cleanup(srv.Close)
 
 	return &Env{T: t, Store: st, Server: srv, Metrics: metrics}
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // Client is one authenticated user's view of the API.

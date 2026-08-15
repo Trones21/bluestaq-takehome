@@ -12,6 +12,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/authz"
 	"github.com/Trones21/bluestaq-takehome/internal/httpx"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
+	"github.com/Trones21/bluestaq-takehome/internal/storage"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
 	"github.com/Trones21/bluestaq-takehome/internal/store/sqlcgen"
 	"github.com/go-chi/chi/v5"
@@ -27,10 +28,20 @@ const (
 type Handler struct {
 	Store   *store.Store
 	Metrics *obs.Metrics
+	Storage StorageDeps
 }
 
-func New(s *store.Store, m *obs.Metrics) *Handler {
-	return &Handler{Store: s, Metrics: m}
+// StorageDeps groups the object store and the policy applied to it.
+type StorageDeps struct {
+	Store       storage.Store
+	UploadTTL   time.Duration
+	DownloadTTL time.Duration
+	MaxBytes    int64
+	AllowedMIME []string
+}
+
+func New(s *store.Store, m *obs.Metrics, sd StorageDeps) *Handler {
+	return &Handler{Store: s, Metrics: m, Storage: sd}
 }
 
 func (h *Handler) Routes(r chi.Router) {
@@ -43,6 +54,10 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Get("/notes/{id}/shares", h.listShares)
 	r.Put("/notes/{id}/shares", h.upsertShare)
 	r.Delete("/notes/{id}/shares/{principalType}/{principalID}", h.revokeShare)
+	r.Get("/notes/{id}/attachments", h.listAttachments)
+	r.Post("/notes/{id}/attachments", h.createAttachment)
+	r.Post("/notes/{id}/attachments/{attachmentID}/complete", h.completeAttachment)
+	r.Delete("/notes/{id}/attachments/{attachmentID}", h.deleteAttachment)
 }
 
 // Note is the wire representation.
@@ -85,6 +100,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, httpx.Invalid(map[string]string{
 			"title": fmt.Sprintf("must be between 1 and %d characters", maxTitleLen),
 		}))
+		return
+	}
+
+	// A new note cannot yet own attachments, so any reference in its body must
+	// point at another note's -- which is exactly the copy-paste case.
+	if len(referencedIDs(req.Body)) > 0 {
+		httpx.WriteProblem(w, r, httpx.Errorf(http.StatusBadRequest,
+			"a new note cannot reference attachments; create it first, upload, then edit the body"))
 		return
 	}
 
@@ -169,6 +192,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if len(fields) > 0 {
 		httpx.WriteProblem(w, r, httpx.Invalid(fields))
 		return
+	}
+
+	if req.Body != nil {
+		if err := h.validateBodyReferences(r, row.ID, *req.Body); err != nil {
+			httpx.WriteProblem(w, r, err)
+			return
+		}
 	}
 
 	updated, err := h.Store.UpdateNote(r.Context(), params)
