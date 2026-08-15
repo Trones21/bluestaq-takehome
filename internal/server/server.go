@@ -14,6 +14,7 @@ import (
 	"github.com/Trones21/bluestaq-takehome/internal/auth"
 	"github.com/Trones21/bluestaq-takehome/internal/config"
 	"github.com/Trones21/bluestaq-takehome/internal/httpx"
+	"github.com/Trones21/bluestaq-takehome/internal/notes"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ type Deps struct {
 	// Feature handlers. Nil-checked so router tests can build a partial
 	// server without standing up every dependency.
 	Users *users.Handler
+	Notes *notes.Handler
 }
 
 // PublicRouter builds the API listener.
@@ -66,6 +68,9 @@ func PublicRouter(d Deps) http.Handler {
 			r.Use(auth.Middleware(d.Tokens))
 			if d.Users != nil {
 				r.Group(d.Users.AuthedRoutes)
+			}
+			if d.Notes != nil {
+				r.Group(d.Notes.Routes)
 			}
 		})
 	})

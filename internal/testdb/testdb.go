@@ -8,8 +8,14 @@ package testdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,12 +34,95 @@ var (
 	migrateErr  error
 )
 
-// URL returns the test database connection string.
-func URL() string {
+// BaseURL is the configured test database, which supplies the credentials and
+// host. The database name in it is replaced per package -- see URL.
+func BaseURL() string {
 	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
 		return v
 	}
 	return defaultURL
+}
+
+// URL returns this test package's own database.
+//
+// One database per package, because `go test ./...` runs separate packages
+// concurrently while tests *within* a package run sequentially. Sharing one
+// database across packages means one package's truncate wipes another's
+// fixtures mid-test -- which passes when each package is run alone and fails
+// only on the full suite, the worst way for it to fail.
+//
+// Per-package rather than per-test because sequential execution within a
+// package already provides the isolation, and creating a database per test
+// would dominate the runtime.
+func URL() string {
+	base := BaseURL()
+	name := packageDBName()
+	if name == "" {
+		return base
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	u.Path = "/" + name
+	return u.String()
+}
+
+// packageDBName derives a database name from the test binary, which go test
+// names after the package under test (e.g. ".../notes.test").
+func packageDBName() string {
+	bin := strings.TrimSuffix(filepath.Base(os.Args[0]), ".test")
+	if bin == "" {
+		return ""
+	}
+	// Guard against two packages sharing a base name in different directories.
+	sum := sha256.Sum256([]byte(os.Args[0]))
+	safe := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return '_'
+	}, strings.ToLower(bin))
+
+	return fmt.Sprintf("notes_test_%s_%s", safe, hex.EncodeToString(sum[:3]))
+}
+
+// ensureDatabase creates this package's database if it does not exist,
+// connecting to the configured one to issue the CREATE.
+func ensureDatabase(ctx context.Context) error {
+	target := URL()
+	if target == BaseURL() {
+		return nil
+	}
+
+	u, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimPrefix(u.Path, "/")
+
+	admin, err := pgxpool.New(ctx, BaseURL())
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+
+	var exists bool
+	if err := admin.QueryRow(ctx,
+		`select exists(select 1 from pg_database where datname = $1)`, name,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	// CREATE DATABASE cannot be parameterised, and the name is derived from
+	// the test binary path rather than any external input.
+	_, err = admin.Exec(ctx, fmt.Sprintf("create database %q", name))
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		return err
+	}
+	return nil
 }
 
 // New returns a store connected to a migrated, empty test database.
@@ -48,7 +137,11 @@ func New(t *testing.T) *store.Store {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, URL())
+	var pool *pgxpool.Pool
+	err := ensureDatabase(ctx)
+	if err == nil {
+		pool, err = pgxpool.New(ctx, URL())
+	}
 	if err == nil {
 		err = pool.Ping(ctx)
 	}

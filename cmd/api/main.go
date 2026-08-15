@@ -14,6 +14,7 @@ import (
 
 	"github.com/Trones21/bluestaq-takehome/internal/auth"
 	"github.com/Trones21/bluestaq-takehome/internal/config"
+	"github.com/Trones21/bluestaq-takehome/internal/notes"
 	"github.com/Trones21/bluestaq-takehome/internal/obs"
 	"github.com/Trones21/bluestaq-takehome/internal/server"
 	"github.com/Trones21/bluestaq-takehome/internal/store"
@@ -52,14 +53,16 @@ func run() error {
 
 	st := store.New(pool)
 	tokens := auth.NewTokens(cfg.JWTSecret, cfg.JWTTTL)
+	metrics := obs.NewMetrics()
 
 	deps := server.Deps{
 		Config:  cfg,
 		Logger:  log,
-		Metrics: obs.NewMetrics(),
+		Metrics: metrics,
 		DB:      pool,
 		Tokens:  tokens,
 		Users:   users.New(st, tokens),
+		Notes:   notes.New(st, metrics),
 	}
 
 	public := &http.Server{
