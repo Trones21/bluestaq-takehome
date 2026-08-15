@@ -1,0 +1,9 @@
+# Dependencies for the noCRUD Python runner itself.
+#   requests  - the APIClient's HTTP calls
+#   psycopg   - per-flow database provisioning (create/drop), psycopg 3
+#
+# psycopg is a floor rather than a pin: upstream noCRUD pins
+# psycopg[binary]==3.2.1, which no longer resolves on PyPI (the binary wheel
+# for that version is gone; 3.2.2 is the oldest still published).
+requests>=2.32.3
+psycopg[binary]>=3.2.2

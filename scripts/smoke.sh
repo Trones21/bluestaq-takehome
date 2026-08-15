@@ -15,7 +15,10 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 cd "$REPO_ROOT"
 
-require_cmd go curl
+require_cmd curl
+
+PY="$REPO_ROOT/nocrud/.venv/bin/python"
+[ -x "$PY" ] || die "runner venv missing — create it with: make flows-setup"
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 ADMIN_URL="${ADMIN_URL:-http://localhost:9090}"
@@ -31,8 +34,12 @@ if [[ "$ADMIN_URL" == http://localhost:* ]]; then
   ok "service is ready"
 fi
 
-info "running request flows"
-if BASE_URL="$BASE_URL" go run ./flows all; then
+# --serial points the runner at an already-running app instead of provisioning
+# one per flow. That is the only correct mode against a deployment: parallel
+# mode would try to create databases on the production server.
+info "running request flows (serial, against the deployed app)"
+cd "$REPO_ROOT/nocrud"
+if APP_PORT="${APP_PORT:-8080}" NOCRUD_BASE_URL="$BASE_URL" "$PY" noCRUD.py -req --serial; then
   ok "all flows passed"
 else
   die "flows failed against $BASE_URL"

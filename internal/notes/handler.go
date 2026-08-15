@@ -39,6 +39,9 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Patch("/notes/{id}", h.update)
 	r.Delete("/notes/{id}", h.delete)
 	r.Post("/notes/{id}/restore", h.restore)
+	r.Get("/notes/{id}/shares", h.listShares)
+	r.Put("/notes/{id}/shares", h.upsertShare)
+	r.Delete("/notes/{id}/shares/{principalType}/{principalID}", h.revokeShare)
 }
 
 // Note is the wire representation.

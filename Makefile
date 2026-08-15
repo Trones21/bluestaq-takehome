@@ -60,9 +60,19 @@ test: dev-up ## Run every test against a real database
 test-unit: ## Run only tests that need no database
 	go test ./internal/authz/... ./internal/auth/... ./internal/config/... ./internal/server/... -count=1
 
+.PHONY: flows-setup
+flows-setup: ## Create the Python venv for the noCRUD flow runner
+	cd nocrud && python3 -m venv .venv && ./.venv/bin/pip install -q -r requirements.txt
+	@echo "✅ flow runner ready"
+
 .PHONY: flows
-flows: ## Run the multi-user request flows against a running API
-	go run ./flows all
+flows: build ## Run every noCRUD flow (each provisions its own db + app)
+	cd nocrud && ./.venv/bin/python noCRUD.py -req
+	cd nocrud && ./.venv/bin/python noCRUD.py -crud
+
+.PHONY: flows-list
+flows-list: ## List the registered flows
+	cd nocrud && ./.venv/bin/python noCRUD.py -l
 
 .PHONY: smoke
 smoke: ## Run the flows against a deployment (BASE_URL=...)
