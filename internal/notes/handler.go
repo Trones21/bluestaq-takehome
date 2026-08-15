@@ -34,6 +34,7 @@ func New(s *store.Store, m *obs.Metrics) *Handler {
 }
 
 func (h *Handler) Routes(r chi.Router) {
+	r.Get("/notes", h.list)
 	r.Post("/notes", h.create)
 	r.Get("/notes/{id}", h.get)
 	r.Patch("/notes/{id}", h.update)
