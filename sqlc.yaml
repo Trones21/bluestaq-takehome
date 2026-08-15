@@ -1,0 +1,60 @@
+# sqlc generates typed Go from the SQL in internal/store/queries, checked
+# against the real migration set.
+#
+# The reason for sqlc is not scan boilerplate -- it is compile-time
+# verification against the schema. Rename a column in a migration, regenerate,
+# and the *build* breaks at every query that touched it. Hand-written scan code
+# fails at runtime, in whichever endpoint was missed.
+#
+# One query does not live here: the note list/search endpoint has optional
+# filters, and sqlc's answer to dynamic predicates (`sqlc.narg` plus
+# `WHERE ($1 IS NULL OR ...)`) reliably defeats the index. That query is
+# hand-written pgx, in its own file, marked as the deliberate exception.
+
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/store/queries"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/store/sqlcgen"
+        sql_package: "pgx/v5"
+
+        # Nullable columns become pointers rather than pgtype wrappers, so
+        # handler code reads as ordinary Go.
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        emit_json_tags: false
+
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          # citext exists for case-insensitive email uniqueness; it is a plain
+          # string on the Go side.
+          - db_type: "pg_catalog.citext"
+            go_type: "string"
+          - db_type: "citext"
+            go_type: "string"
+          # Plain time.Time rather than pgtype wrappers, so handlers and JSON
+          # marshalling need no unwrapping.
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+          # No override for search_tsv: sqlc leaves tsvector as interface{} and
+          # will not map it. Harmless here -- note queries list their columns
+          # explicitly rather than using `select *`, so the generated row
+          # structs never carry it and the vector never crosses the wire. Only
+          # the unused table model mentions it.
