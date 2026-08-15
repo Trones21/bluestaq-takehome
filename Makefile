@@ -46,6 +46,14 @@ migrate-status: ## Show which migrations have been applied
 run: ## Run the API (loads scripts/env/local.sh)
 	@set -a && source scripts/env/local.sh && set +a && go run ./cmd/api
 
+.PHONY: sweep
+sweep: ## Delete abandoned uploads (pending >24h)
+	@set -a && source scripts/env/local.sh && set +a && go run ./cmd/sweep
+
+.PHONY: sweep-dry-run
+sweep-dry-run: ## Show what the sweep would delete, without deleting
+	@set -a && source scripts/env/local.sh && set +a && go run ./cmd/sweep -dry-run
+
 .PHONY: seed
 seed: ## Load demo users, teams and notes
 	@set -a && source scripts/env/local.sh && set +a && go run ./cmd/seed
